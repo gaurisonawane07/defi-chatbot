@@ -2,87 +2,120 @@
 pragma solidity ^0.8.19;
 
 import {FunctionsClient} from "@chainlink/contracts/src/v0.8/functions/v1_0_0/FunctionsClient.sol";
+import {ConfirmedOwner} from "@chainlink/contracts/src/v0.8/shared/access/ConfirmedOwner.sol";
 import {FunctionsRequest} from "@chainlink/contracts/src/v0.8/functions/v1_0_0/libraries/FunctionsRequest.sol";
-import {CCIPReceiver} from "@chainlink/contracts-ccip/src/v0.8/ccip/applications/CCIPReceiver.sol";
-import {Client} from "@chainlink/contracts-ccip/src/v0.8/ccip/libraries/Client.sol";
-import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 
-contract DeFiAIChatbot is FunctionsClient, CCIPReceiver, Ownable {
+contract DeFiAICatbotSimplified is FunctionsClient, ConfirmedOwner {
     using FunctionsRequest for FunctionsRequest.Request;
 
-    bytes32 public s_lastRequestId;
-    bytes public s_lastResponse;
-    bytes public s_lastError;
-    uint64 public s_subscriptionId;
+    // --- Configuration Variables ---
+    address public immutable i_functionsRouter;
+    bytes32 public immutable i_donId;
+    uint64 public i_subscriptionId;
+    uint32 public i_callbackGasLimit;
 
-    // FIXED: Correctly declared state variables as strings
-    string public s_onchainDataSource;
-    string public s_aiApiCallSource;
+    address constant SEPOLIA_ROUTER = 0xb83E47C2bC239B3bf370bc41e1459A34b41238D0;
+    bytes32 constant SEPOLIA_DON_ID = 0x66756e2d657468657265756d2d7365706f6c69612d3100000000000000000000;
 
-    event AiResponseReceived(bytes32 indexed requestId, string response);
-    event RequestFailed(bytes32 indexed requestId, string error);
-    event CCIPMessageReceived(
-        bytes32 indexed messageId,
-        uint64 indexed sourceChainSelector,
-        bytes sender,
-        bytes data,
-        Client.EVMTokenAmount[] tokenAmounts
+    // --- State Variables ---
+    mapping(bytes32 => address) private s_requestingUser;
+
+    // --- Events ---
+    event AIResponseReceived(
+        bytes32 indexed requestId,
+        address indexed userAddress,
+        string responseText
     );
 
-    constructor(address functionsRouter, address ccipRouter, uint64 subscriptionId)
-        FunctionsClient(functionsRouter)
-        CCIPReceiver(ccipRouter)
-        Ownable(msg.sender) // Assumes OpenZeppelin v5+
+    event OnchainDataReceived(
+        bytes32 indexed requestId,
+        address indexed userAddress,
+        string formattedData
+    );
+
+    // --- Constructor ---
+    constructor(uint64 subscriptionId, uint32 callbackGasLimit)
+        FunctionsClient(SEPOLIA_ROUTER)
+        ConfirmedOwner(msg.sender)
     {
-        s_subscriptionId = subscriptionId;
+        i_functionsRouter = SEPOLIA_ROUTER;
+        i_donId = SEPOLIA_DON_ID;
+        i_subscriptionId = subscriptionId;
+        i_callbackGasLimit = callbackGasLimit;
     }
 
-    // FIXED: Function name and parameters match the new string variables
-    function setFunctionsSourceCode(string memory onchainDataCode, string memory aiApiCallCode) external onlyOwner {
-        s_onchainDataSource = onchainDataCode;
-        s_aiApiCallSource = aiApiCallCode;
-    }
+    // --- Functions to Request Chainlink Functions ---
 
-    function requestOnchainData(string calldata query, bytes32 donId, uint32 gasLimit) external onlyOwner returns (bytes32 requestId) {
+    function requestOnchainData(
+        string calldata jsSourceCode,
+        string[] calldata jsArgs
+    ) external returns (bytes32 requestId) {
         FunctionsRequest.Request memory req;
-        // This now correctly references the declared s_onchainDataSource variable
-        req.initialize(s_onchainDataSource, bytes(""));
-        
-        string[] memory args = new string[](1);
-        args[0] = query;
-        req.addArgs(args);
-        
-        requestId = _sendRequest(req.encodeCBOR(), s_subscriptionId, gasLimit, donId);
-        s_lastRequestId = requestId;
+        req.initializeRequestForInlineJavaScript(jsSourceCode);
+        if (jsArgs.length > 0) req.setArgs(jsArgs);
+
+        requestId = _sendRequest(
+            req.encodeCBOR(),
+            i_subscriptionId,
+            i_callbackGasLimit,
+            i_donId
+        );
+
+        s_requestingUser[requestId] = msg.sender;
         return requestId;
     }
 
-    function requestAIAssistance(string calldata userPrompt, string calldata onchainContext, bytes32 donId, uint32 gasLimit) external returns (bytes32 requestId) {
+    function requestAIAssistance(
+        string calldata jsSourceCode,
+        string calldata userQuery,
+        string calldata onchainContext
+    ) external returns (bytes32 requestId) {
         FunctionsRequest.Request memory req;
-        // This now correctly references the declared s_aiApiCallSource variable
-        req.initialize(s_aiApiCallSource, bytes(""));
+        req.initializeRequestForInlineJavaScript(jsSourceCode);
 
         string[] memory args = new string[](2);
-        args[0] = userPrompt;
+        args[0] = userQuery;
         args[1] = onchainContext;
-        req.addArgs(args);
-        
-        requestId = _sendRequest(req.encodeCBOR(), s_subscriptionId, gasLimit, donId);
-        s_lastRequestId = requestId;
+        req.setArgs(args);
+
+        requestId = _sendRequest(
+            req.encodeCBOR(),
+            i_subscriptionId,
+            i_callbackGasLimit,
+            i_donId
+        );
+
+        s_requestingUser[requestId] = msg.sender;
         return requestId;
     }
+
+    // --- Corrected Callback Function for Chainlink Functions Responses ---
+
     
-    function fulfillRequest(bytes32 requestId, bytes calldata response, bytes calldata err) internal override {
+    function fulfillRequest(
+        bytes32 requestId,
+        bytes memory response, // Changed from calldata to memory
+        bytes memory err       // Changed from calldata to memory
+    ) internal override {
+        address user = s_requestingUser[requestId];
+        require(user != address(0), "Request not found or already processed.");
+
+        delete s_requestingUser[requestId];
+
         if (err.length > 0) {
-            s_lastError = err;
-            emit RequestFailed(requestId, string(err));
-        } else {
-            s_lastResponse = response;
-            emit AiResponseReceived(requestId, string(response));
+            string memory errorMessage = string(err);
+            emit AIResponseReceived(requestId, user, string(abi.encodePacked("Error from Functions: ", errorMessage)));
+            return;
         }
+
+        string memory decodedResponse = abi.decode(response, (string));
+
+        emit AIResponseReceived(requestId, user, decodedResponse);
     }
 
-    function _ccipReceive(Client.Any2EVMMessage memory message) internal override {
-        emit CCIPMessageReceived(message.messageId, message.sourceChainSelector, message.sender, message.data, message.tokenAmounts);
+    // --- Admin Function (Owner-only) ---
+
+    function updateSubscriptionId(uint64 newSubscriptionId) external onlyOwner {
+        i_subscriptionId = newSubscriptionId;
     }
 }
