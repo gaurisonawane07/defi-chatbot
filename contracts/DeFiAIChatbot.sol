@@ -118,4 +118,12 @@ contract DeFiAICatbotSimplified is FunctionsClient, ConfirmedOwner {
     function updateSubscriptionId(uint64 newSubscriptionId) external onlyOwner {
         i_subscriptionId = newSubscriptionId;
     }
+    function testFulfill(
+    bytes32 requestId,
+    bytes memory response,
+    bytes memory err
+) external onlyOwner {
+    // This directly calls the internal function we want to test
+    fulfillRequest(requestId, response, err);
+}
 }
