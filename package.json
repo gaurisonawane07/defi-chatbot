@@ -19,7 +19,9 @@
     "wagmi": "^2.12.1"
   },
   "devDependencies": {
+    "@chainlink/functions-toolkit": "^0.3.2",
     "@nomicfoundation/hardhat-toolbox": "^5.0.0",
+    "dotenv": "^16.5.0",
     "eslint": "^8",
     "eslint-config-next": "14.2.5",
     "hardhat": "^2.22.6",
