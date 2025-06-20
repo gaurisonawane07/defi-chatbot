@@ -1,52 +1,46 @@
-// This script makes a call to the OpenAI API to get a natural language response.
-// It requires one secret: `apiKey` for your OpenAI API key.
-// It takes two arguments: args[0] is the user's query, args[1] is any on-chain data context.
 
 const userQuery = args[0];
 const onchainContext = args[1];
 
-// Ensure the OpenAI API key is provided in secrets
-if (!secrets.apiKey) {
-  throw Error("OpenAI API Key is not set in secrets. Please upload it to the Chainlink Functions secrets.");
+const GEMINI_API_KEY = "AIzaSyATrMbUtgm-VayfrAIMf7qYodDIqu8TZQ4"; 
+if (!GEMINI_API_KEY || GEMINI_API_KEY === "AIzaSyATrMbUtgm-VayfrAIMf7qYodDIqu8TZQ4") {
+    throw Error("Gemini API Key not set. Please edit the ai-request.js file and replace the placeholder text.");
 }
 
-// Construct the prompt for the AI model
-const prompt = `
-  You are a helpful DeFi assistant that explains complex topics in simple terms.
-  
-  Based on the following on-chain context (if any): "${onchainContext}"
 
-  Answer the user's question: "${userQuery}"
-`;
+const API_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models/";
+const MODEL_NAME = "gemini-pro"; 
+const API_URL = `${API_BASE_URL}${MODEL_NAME}:generateContent?key=${GEMINI_API_KEY}`;
 
-// Make the HTTP request to OpenAI's Chat Completions endpoint
-const openAIRequest = Functions.makeHttpRequest({
-  url: "https://api.openai.com/v1/chat/completions",
+const fullPrompt = `User query: "${userQuery}"\nOn-chain context: "${onchainContext}"\n\nProvide a concise and helpful response.`;
+
+const payload = {
+  contents: [{ parts: [{ text: fullPrompt }] }],
+};
+
+
+const response = await Functions.makeHttpRequest({
+  url: API_URL,
   method: "POST",
   headers: {
-    "Authorization": `Bearer ${secrets.apiKey}`,
     "Content-Type": "application/json",
   },
-  data: {
-    model: "gpt-3.5-turbo",
-    messages: [{ role: "user", content: prompt }],
-    temperature: 0.7, // A little creativity
-  },
-  timeout: 9000, // 9 seconds
+  data: payload,
+  timeout: 15000
 });
 
-// Await the response from the API
-const [response] = await Promise.all([openAIRequest]);
-
 if (response.error) {
-    console.error("OpenAI API Error:", JSON.stringify(response));
-    throw new Error("Request to OpenAI API failed");
+  console.error("Gemini API Request Error:", response.error.message);
+  throw new Error(`Gemini API Request Failed`);
 }
 
-// Extract the AI's response text
-const result = response.data.choices[0].message.content;
+const result = response.data;
 
-console.log("AI Response:", result);
-
-// Return the result as a string, encoded for the smart contract
-return Functions.encodeString(result);
+if (result.candidates && result.candidates.length > 0) {
+  const generatedText = result.candidates[0].content.parts[0].text;
+  console.log("Generated Text:", generatedText);
+  return Functions.encodeString(generatedText);
+} else {
+  console.error("Gemini API Response Structure Unexpected:", JSON.stringify(result, null, 2));
+  return Functions.encodeString("Error: AI response format unexpected.");
+}
