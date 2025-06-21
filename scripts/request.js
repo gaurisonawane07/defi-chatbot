@@ -46,7 +46,7 @@ async function main() {
     
     chatbotContract.once(aiFilter, (requestId, userAddress, responseText, event) => {
         console.log("\n--- AI Assistance Request Fulfilled! ---");
-        // The event data is in the `args` property of the event object.
+        
         console.log(`Request ID: ${event.args.requestId}`);
         console.log(`User Address: ${event.args.userAddress}`);
         console.log(`AI Response: ${event.args.responseText}`);
